@@ -24,6 +24,7 @@ export const qk = {
   // One team: its counters and what the caller may do with what it holds.
   team: (teamId: number) => ['team', teamId] as const,
   workspaces: ['workspaces'] as const,
+  workspaceCreation: ['workspaceCreation'] as const,
   // One workspace a caller manages. Its managers, candidates and settings sit under it, so
   // invalidating the workspace refreshes all of them.
   workspace: (workspaceId: number) => ['workspace', workspaceId] as const,

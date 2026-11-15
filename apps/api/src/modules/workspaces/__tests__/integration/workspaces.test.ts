@@ -47,6 +47,196 @@ async function makeAdmin(
 describe('workspaces', () => {
   beforeEach(resetDb);
 
+  describe('workspace creation', () => {
+    afterEach(() => setOwnedWorkspaceLimit());
+
+    function create(cookie: string, input: unknown) {
+      return app.handle(
+        new Request('http://localhost/workspaces', {
+          method: 'POST',
+          headers: { cookie, 'content-type': 'application/json' },
+          body: JSON.stringify(input),
+        }),
+      );
+    }
+
+    function capability(cookie: string) {
+      return app.handle(
+        new Request('http://localhost/workspaces/creation', { headers: { cookie } }),
+      );
+    }
+
+    it('lets one ordinary account own three workspaces with their own teams', async () => {
+      await setup();
+      const person = await signUpTestUser({ team: false });
+      const client = authedApi(person.cookie);
+      const ids = [person.workspaceId!];
+
+      for (const name of ['Second', 'Third']) {
+        const response = await client.workspaces.post({ name });
+        expect(response.status).toBe(201);
+        const created = response.data!;
+        expect(created).toMatchObject({ name, role: 'owner', managerCount: 1 });
+        expect((await client.workspaces({ workspaceId: created.id }).get()).status).toBe(200);
+        ids.push(created.id);
+      }
+
+      expect(new Set(ids).size).toBe(3);
+      expect((await client.teams.get()).data).toEqual([]);
+      const team = await client.teams.post({
+        name: 'Third team',
+        slug: 'third',
+        workspaceId: ids[2]!,
+      });
+      expect(team.status).toBe(201);
+      expect(team.data!.workspaceId).toBe(ids[2]!);
+      expect(
+        (await client.workspaces.get()).data!.filter((entry) => entry.role === 'owner'),
+      ).toHaveLength(3);
+    });
+
+    it.each([
+      {},
+      { name: null },
+      { name: 1 },
+      { name: '' },
+      { name: '   ' },
+      { name: 'a'.repeat(61) },
+    ])('refuses an invalid workspace name without creating a workspace: %j', async (input) => {
+      const { owner, ownerApi } = await setup();
+      const before = (await ownerApi.workspaces.get()).data;
+      expect((await create(owner.cookie, input)).status).toBe(400);
+      expect((await ownerApi.workspaces.get()).data).toEqual(before);
+    });
+
+    it.each(['a', 'a'.repeat(60), `  ${'a'.repeat(60)}  `])(
+      'accepts a workspace name within the normalized bounds: %s',
+      async (name) => {
+        const { owner } = await setup();
+        const response = await create(owner.cookie, { name });
+        expect(response.status).toBe(201);
+        expect(await response.json()).toMatchObject({ name: name.trim() });
+      },
+    );
+
+    it('allows repeated workspace names with distinct IDs', async () => {
+      const { ownerApi } = await setup();
+      const first = await ownerApi.workspaces.post({ name: 'Same name' });
+      const second = await ownerApi.workspaces.post({ name: 'Same name' });
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(201);
+      expect(first.data!.id).not.toBe(second.data!.id);
+    });
+
+    it('assigns ownership to the authenticated caller', async () => {
+      const { owner, ownerApi } = await setup();
+      const other = await signUpTestUser({ team: false });
+      const response = await create(owner.cookie, { name: 'Mine', ownerId: other.userId });
+      expect(response.status).toBe(201);
+      const created = (await response.json()) as { id: number };
+      const managers = (await ownerApi.workspaces({ workspaceId: created.id }).managers.get())
+        .data!;
+      expect(managers).toEqual([expect.objectContaining({ userId: owner.userId, role: 'owner' })]);
+      expect(
+        (await authedApi(other.cookie).workspaces({ workspaceId: created.id }).get()).status,
+      ).toBe(404);
+    });
+
+    it('rechecks personal workspace policy after an allowed capability read', async () => {
+      const { owner } = await setup();
+      const person = await signUpTestUser({ team: false });
+      const allowed = await capability(person.cookie);
+      expect(allowed.status).toBe(200);
+      expect(await allowed.json()).toEqual({ allowed: true, reason: null });
+
+      await setAuthSettings({ personalWorkspaces: false });
+      const restricted = await capability(person.cookie);
+      expect(await restricted.json()).toEqual({ allowed: false, reason: 'restricted' });
+      expect((await create(person.cookie, { name: 'Refused' })).status).toBe(403);
+      expect((await create(owner.cookie, { name: 'Root workspace' })).status).toBe(201);
+    });
+
+    it('reports and enforces an explicit ownership limit', async () => {
+      const { owner } = await setup();
+      setOwnedWorkspaceLimit(2);
+      expect(await (await capability(owner.cookie)).json()).toEqual({
+        allowed: true,
+        reason: null,
+      });
+      expect((await create(owner.cookie, { name: 'Second' })).status).toBe(201);
+      expect(await (await capability(owner.cookie)).json()).toEqual({
+        allowed: false,
+        reason: 'limit',
+      });
+      expect((await create(owner.cookie, { name: 'Third' })).status).toBe(409);
+    });
+
+    it('admits only one concurrent creation for the last ownership slot', async () => {
+      await setup();
+      const person = await signUpTestUser({ team: false });
+      setOwnedWorkspaceLimit(2);
+      const responses = await Promise.all([
+        create(person.cookie, { name: 'Second' }),
+        create(person.cookie, { name: 'Third' }),
+      ]);
+      expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
+      expect((await authedApi(person.cookie).workspaces.get()).data).toHaveLength(2);
+    });
+
+    it('allows concurrent creation with the unlimited default', async () => {
+      const { ownerApi } = await setup();
+      const responses = await Promise.all([
+        ownerApi.workspaces.post({ name: 'Second' }),
+        ownerApi.workspaces.post({ name: 'Third' }),
+      ]);
+      expect(responses.map((response) => response.status)).toEqual([201, 201]);
+      expect(responses[0]!.data!.id).not.toBe(responses[1]!.data!.id);
+    });
+
+    it('rolls back a workspace when its owner cannot be inserted', async () => {
+      await setup();
+      const before = await db.$count(workspace);
+      await expect(
+        createOwnWorkspace({ id: 'missing-owner', role: 'god' }, 'Orphan'),
+      ).rejects.toThrow();
+      expect(await db.$count(workspace)).toBe(before);
+    });
+
+    it('refuses agent accounts for capability and creation', async () => {
+      const { ownerApi } = await setup();
+      await createProject(ownerApi, { key: 'MKT', name: 'Marketing' });
+      const created = await createAgent(ownerApi, 'MKT', {
+        name: 'Bot',
+        username: 'workspace-bot',
+        kind: 'external',
+      });
+      const headers = { 'x-api-key': created.data!.apiKey!, 'content-type': 'application/json' };
+      const allowed = await app.handle(
+        new Request('http://localhost/workspaces/creation', { headers }),
+      );
+      expect(allowed.status).toBe(200);
+      expect(await allowed.json()).toEqual({ allowed: false, reason: 'restricted' });
+      const response = await app.handle(
+        new Request('http://localhost/workspaces', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ name: 'Bot workspace' }),
+        }),
+      );
+      expect(response.status).toBe(403);
+    });
+
+    it('refuses a deactivated account on both creation routes', async () => {
+      const { ownerApi } = await setup();
+      const person = await signUpTestUser({ team: false });
+      expect((await ownerApi.god.users({ userId: person.userId }).deactivate.post()).status).toBe(
+        200,
+      );
+      expect((await capability(person.cookie)).status).toBe(401);
+      expect((await create(person.cookie, { name: 'Refused' })).status).toBe(401);
+    });
+  });
+
   describe('GET /workspaces', () => {
     it('lists the workspace with the standing of each reader', async () => {
       const { ownerApi, workspaceId, teamId } = await setup();
@@ -61,6 +251,145 @@ describe('workspaces', () => {
         { id: workspaceId, name: 'Root', role: null, color: null, canCreateTeam: false },
       ]);
       expect((await authedApi(outsider.cookie).workspaces.get()).data).toEqual([]);
+    });
+  });
+
+  describe('several owned workspaces', () => {
+    async function ownedWorkspaces() {
+      const { ownerApi: root } = await setup();
+      const person = await signUpTestUser({ team: false });
+      const client = authedApi(person.cookie);
+      const second = (await client.workspaces.post({ name: 'Second' })).data!;
+      const third = (await client.workspaces.post({ name: 'Third' })).data!;
+      return { root, person, client, firstId: person.workspaceId!, second, third };
+    }
+
+    it('keeps settings independent between workspaces owned by the same person', async () => {
+      const { client, firstId, second } = await ownedWorkspaces();
+      const before = (await client.workspaces({ workspaceId: second.id }).get()).data!;
+      expect(
+        (
+          await client.workspaces({ workspaceId: firstId }).patch({
+            name: 'Renamed',
+            color: '#123456',
+            teamCreation: 'members',
+            sharingEnabled: false,
+          })
+        ).status,
+      ).toBe(200);
+      expect((await client.workspaces({ workspaceId: second.id }).get()).data).toEqual(before);
+      const team = await client.teams.post({
+        name: 'Second team',
+        slug: 'second',
+        workspaceId: second.id,
+      });
+      expect(
+        (
+          await client
+            .workspaces({ workspaceId: firstId })
+            .patch({ sharingTeamIds: [team.data!.id] })
+        ).status,
+      ).toBe(400);
+    });
+
+    it('deletes an empty workspace without replacing it while others are owned', async () => {
+      const { client, firstId, second, third } = await ownedWorkspaces();
+      const team = (
+        await client.teams.post({ name: 'Second team', slug: 'second', workspaceId: second.id })
+      ).data!;
+      const project = (
+        await client.teams({ teamId: team.id }).projects.post({ key: 'APP', name: 'App' })
+      ).data!;
+      expect((await client.workspaces({ workspaceId: firstId }).delete()).status).toBe(204);
+      for (const personalWorkspaces of [false, true]) {
+        await setAuthSettings({ personalWorkspaces });
+        expect((await client.workspaces.get()).data!.map((entry) => entry.id).sort()).toEqual(
+          [second.id, third.id].sort(),
+        );
+      }
+      expect((await client.teams({ teamId: team.id }).projects.get()).data!.items).toContainEqual(
+        expect.objectContaining({ id: project.id }),
+      );
+      expect((await client.workspaces({ workspaceId: second.id }).delete()).status).toBe(409);
+    });
+
+    it('refuses to delete a workspace whose remaining work is an AI agent', async () => {
+      const { client, second } = await ownedWorkspaces();
+      const team = (
+        await client.teams.post({ name: 'Agent team', slug: 'agent-team', workspaceId: second.id })
+      ).data!;
+      const project = (
+        await client.teams({ teamId: team.id }).projects.post({ key: 'BOT', name: 'Bot' })
+      ).data!;
+      expect(
+        (
+          await createAgent(client, 'BOT', {
+            name: 'Bot',
+            username: 'remaining-bot',
+            kind: 'external',
+          })
+        ).status,
+      ).toBe(201);
+      expect(
+        (await client.teams({ teamId: team.id }).projects({ projectId: project.id }).delete())
+          .status,
+      ).toBe(204);
+      expect((await client.workspaces({ workspaceId: second.id }).delete()).status).toBe(409);
+    });
+
+    it('processes every owned workspace when an account is deleted', async () => {
+      const { root, person, client, firstId, second, third } = await ownedWorkspaces();
+      for (const entry of [second, third]) {
+        const team = (
+          await client.teams.post({
+            name: entry.name,
+            slug: `team-${entry.id}`,
+            workspaceId: entry.id,
+          })
+        ).data!;
+        expect(
+          (await client.teams({ teamId: team.id }).projects.post({ key: 'APP', name: entry.name }))
+            .status,
+        ).toBe(201);
+      }
+      const projects = (await client.projects.get()).data!;
+      await deleteAccount(person.userId);
+      expect(await db.$count(workspace, eq(workspace.id, firstId))).toBe(0);
+      for (const entry of [second, third]) {
+        expect((await root.workspaces({ workspaceId: entry.id }).get()).data).toMatchObject({
+          id: entry.id,
+          role: 'owner',
+        });
+      }
+      for (const project of projects) {
+        expect((await root.projects({ projectKey: project.ref }).get()).data!.project.id).toBe(
+          project.id,
+        );
+        expect(
+          (await root.projects({ projectKey: project.ref }).members.get()).data!.items,
+        ).toContainEqual(expect.objectContaining({ role: 'owner' }));
+      }
+    });
+
+    it('keeps owned workspaces through sign-in without provisioning another', async () => {
+      const { person, client, firstId, second, third } = await ownedWorkspaces();
+      await auth.api.signInEmail({ body: { email: person.email, password: 'test-password-123' } });
+      expect((await client.workspaces.get()).data!.map((entry) => entry.id).sort()).toEqual(
+        [firstId, second.id, third.id].sort(),
+      );
+    });
+
+    it('replaces only the final deleted workspace while personal workspaces are enabled', async () => {
+      const { client, firstId, second, third } = await ownedWorkspaces();
+      for (const id of [second.id, third.id, firstId]) {
+        expect((await client.workspaces({ workspaceId: id }).delete()).status).toBe(204);
+      }
+      const fresh = (await client.workspaces.get()).data!;
+      expect(fresh).toHaveLength(1);
+      expect([firstId, second.id, third.id]).not.toContain(fresh[0]!.id);
+      await setAuthSettings({ personalWorkspaces: false });
+      expect((await client.workspaces({ workspaceId: fresh[0]!.id }).delete()).status).toBe(204);
+      expect((await client.workspaces.get()).data).toEqual([]);
     });
   });
 
@@ -247,6 +576,7 @@ describe('workspaces', () => {
   });
 
   describe('transferWorkspace', () => {
+    afterEach(() => setOwnedWorkspaceLimit());
     // A person's own workspace with a team, and an admin of it who owns no workspace.
     async function withAdmin() {
       await setup();
@@ -278,6 +608,7 @@ describe('workspaces', () => {
 
     it('refuses somebody who is not its admin, or who owns a workspace already', async () => {
       const { person, personApi, workspaceId, teamId } = await withAdmin();
+      setOwnedWorkspaceLimit(1);
       await setAuthSettings({ personalWorkspaces: true });
       const other = await signUpTestUser({ team: false });
       const transfer = () => transferWorkspace(workspaceId, person.userId, other.userId);
@@ -468,8 +799,8 @@ describe('workspaces', () => {
       ]);
     });
 
-    it('makes none for an AI agent, and no route creates one', async () => {
-      const { owner, ownerApi } = await setup();
+    it('makes no personal workspace for an AI agent', async () => {
+      const { ownerApi } = await setup();
       await createProject(ownerApi, { key: 'MKT', name: 'Marketing' });
       const created = await createAgent(ownerApi, 'MKT', {
         name: 'Bot',
@@ -480,14 +811,6 @@ describe('workspaces', () => {
 
       const seen = (await bot.workspaces.get()).data!;
       expect(seen.filter((w) => w.role === 'owner')).toEqual([]);
-      const post = await app.handle(
-        new Request('http://localhost/workspaces', {
-          method: 'POST',
-          headers: { cookie: owner.cookie, 'content-type': 'application/json' },
-          body: JSON.stringify({ name: 'Second' }),
-        }),
-      );
-      expect(post.status).toBe(404);
     });
 
     it('goes with a deleted account while it holds no project', async () => {
@@ -589,13 +912,14 @@ describe('workspaces', () => {
   describe('createOwnWorkspace', () => {
     afterEach(() => setOwnedWorkspaceLimit());
 
-    it('keeps a person to one workspace unless the limit is raised', async () => {
+    it('enforces an explicit ownership limit', async () => {
       await setup();
       const person = await signUpTestUser({ team: false });
       const account = { id: person.userId, role: 'user' };
+      setOwnedWorkspaceLimit(1);
 
       await expect(createOwnWorkspace(account, 'Second')).rejects.toThrow(
-        'You already own a workspace',
+        'You already own the maximum number of workspaces allowed',
       );
       setOwnedWorkspaceLimit(0);
       expect(await createOwnWorkspace(account, 'Second')).toBeNumber();
@@ -607,7 +931,7 @@ describe('workspaces', () => {
       const person = await signUpTestUser({ team: false });
 
       await expect(createOwnWorkspace({ id: person.userId, role: 'user' }, 'Acme')).rejects.toThrow(
-        'Only the instance owner can create workspaces',
+        'You may not create a workspace',
       );
     });
   });

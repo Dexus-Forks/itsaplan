@@ -1,9 +1,11 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   addWorkspaceAdmin,
+  createWorkspace,
   createWorkspaceScimToken,
   deleteWorkspace,
   getWorkspace,
+  getWorkspaceCreation,
   getWorkspaceScim,
   listWorkspaceManagerCandidates,
   listWorkspaceManagers,
@@ -14,12 +16,46 @@ import {
   setWorkspaceScimGroupMappings,
   updateWorkspace,
   type WorkspacePatch,
+  type WorkspaceSummary,
   updateWorkspaceScim,
 } from '@/lib/api/endpoints/workspaces';
 import { qk } from '@/services/queryKeys';
 
 export function useWorkspacesQuery() {
   return useQuery({ queryKey: qk.workspaces, queryFn: () => listWorkspaces() });
+}
+
+export function useWorkspaceCreationQuery() {
+  return useQuery({
+    queryKey: qk.workspaceCreation,
+    queryFn: getWorkspaceCreation,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useCreateWorkspace() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: createWorkspace,
+    onSuccess: async (workspace) => {
+      qc.setQueryData(qk.workspace(workspace.id), workspace);
+      qc.setQueryData<WorkspaceSummary[]>(qk.workspaces, (current) => [
+        ...(current ?? []).filter((entry) => entry.id !== workspace.id),
+        {
+          id: workspace.id,
+          name: workspace.name,
+          color: workspace.color,
+          role: workspace.role,
+          canCreateTeam: true,
+        },
+      ]);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: qk.workspaces }),
+        qc.invalidateQueries({ queryKey: qk.workspaceCreation }),
+      ]);
+    },
+  });
 }
 
 export function useWorkspaceQuery(workspaceId: number) {
@@ -49,6 +85,7 @@ export function useDeleteWorkspace(workspaceId: number) {
       qc.removeQueries({ queryKey: qk.workspace(workspaceId) });
       void qc.invalidateQueries({ queryKey: qk.workspaces });
       void qc.invalidateQueries({ queryKey: qk.teams });
+      void qc.invalidateQueries({ queryKey: qk.workspaceCreation });
     },
   });
 }

@@ -4,6 +4,7 @@ import { act } from 'react';
 import type { Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
+import { AppRouterContext } from 'next/dist/shared/lib/app-router-context.shared-runtime';
 import { JSDOM } from 'jsdom';
 import type { Project } from '@/lib/api/endpoints/projects';
 import type { Team } from '@/lib/api/endpoints/teams';
@@ -157,22 +158,28 @@ async function render(mobile = true, items = projects) {
   const { RelativeTimeProvider } = await import('@/context/relativeTimeContext');
   await act(async () =>
     root.render(
-      <QueryClientProvider client={client}>
-        <NextIntlClientProvider locale="en" messages={{ nav, common, teams }} timeZone="UTC">
-          <RelativeTimeProvider>
-            <SidebarProvider>
-              <SidebarTrigger />
-              <Sidebar>
-                <ProjectSwitcher
-                  projects={items}
-                  currentProjectKey="eng.P01"
-                  onSelectProject={(key) => selections.push(key)}
-                />
-              </Sidebar>
-            </SidebarProvider>
-          </RelativeTimeProvider>
-        </NextIntlClientProvider>
-      </QueryClientProvider>,
+      <AppRouterContext.Provider
+        value={
+          { push() {}, replace() {}, refresh() {}, back() {}, forward() {}, prefetch() {} } as never
+        }
+      >
+        <QueryClientProvider client={client}>
+          <NextIntlClientProvider locale="en" messages={{ nav, common, teams }} timeZone="UTC">
+            <RelativeTimeProvider>
+              <SidebarProvider>
+                <SidebarTrigger />
+                <Sidebar>
+                  <ProjectSwitcher
+                    projects={items}
+                    currentProjectKey="eng.P01"
+                    onSelectProject={(key) => selections.push(key)}
+                  />
+                </Sidebar>
+              </SidebarProvider>
+            </RelativeTimeProvider>
+          </NextIntlClientProvider>
+        </QueryClientProvider>
+      </AppRouterContext.Provider>,
     ),
   );
   if (mobile) await click('[data-slot="sidebar-trigger"]');
@@ -240,6 +247,8 @@ beforeEach(async () => {
       configurable: true,
       value: async (input: string | URL) => {
         const url = new URL(String(input));
+        if (url.pathname === '/workspaces/creation')
+          return Response.json({ allowed: true, reason: null });
         return url.pathname === '/projects/search' ? searchProjects(url) : Response.json(null);
       },
     },
@@ -354,6 +363,73 @@ describe('ProjectSwitcher', () => {
     await clickButton('Beta');
     assert.ok(document.querySelector('[data-value="project-21"]'));
     assert.equal(document.querySelector('[data-value="project-1"]'), null);
+  });
+
+  it('scopes favorites and recent requests to the selected workspace', async () => {
+    client.setQueryData(qk.teams, [team(1, 1), team(2, 2)]);
+    client.setQueryData(qk.workspaces, [
+      { id: 1, name: 'Alpha', role: 'owner', color: null, canCreateTeam: true },
+      { id: 2, name: 'Beta', role: 'owner', color: null, canCreateTeam: true },
+    ]);
+    localStorage.setItem('project-switcher:anonymous:recent', '[1,22]');
+    await render(false, [
+      { ...projects[0]!, isFavorite: false },
+      { ...projects[0]!, id: 21, teamId: 2, key: 'B01', ref: '2.B01', name: 'Beta favorite' },
+      {
+        ...projects[0]!,
+        id: 22,
+        teamId: 2,
+        key: 'B02',
+        ref: '2.B02',
+        name: 'Beta recent',
+        isFavorite: false,
+      },
+    ]);
+    await clickButton('Beta');
+    assert.ok(
+      searches.some(
+        (params) => params.get('workspaceId') === '2' && params.get('favorite') === 'true',
+      ),
+    );
+    assert.ok(
+      searches.some((params) => params.get('workspaceId') === '2' && params.get('ids') === '1,22'),
+    );
+    assert.ok(document.querySelector('[data-value="project-21"]'));
+    assert.ok(document.querySelector('[data-value="project-22"]'));
+    assert.equal(document.querySelector('[data-value="project-1"]'), null);
+  });
+
+  it('keeps search scoped when switching to an empty owned workspace', async () => {
+    client.setQueryData(qk.teams, [team(1, 1), team(2, 2)]);
+    client.setQueryData(qk.workspaces, [
+      { id: 1, name: 'Alpha', role: 'owner', color: null, canCreateTeam: true },
+      { id: 2, name: 'Beta', role: 'owner', color: null, canCreateTeam: true },
+      { id: 3, name: 'Empty', role: 'owner', color: null, canCreateTeam: true },
+    ]);
+    await render(false);
+    await clickButton('Beta');
+    const input = element('[data-slot="command-input"]') as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(
+        input,
+        'Project 1',
+      );
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    });
+    await settle(300);
+    assert.ok(
+      searches.some(
+        (params) => params.get('workspaceId') === '2' && params.get('q') === 'Project 1',
+      ),
+    );
+    await clickButton('Empty');
+    assert.ok(
+      searches.some(
+        (params) => params.get('workspaceId') === '3' && params.get('q') === 'Project 1',
+      ),
+    );
+    assert.equal(document.querySelector('[data-slot="command-list"] [cmdk-item]'), null);
+    assert.ok(document.querySelector('a[href="/workspaces/3/info"]'));
   });
 
   it("shows a team's visible projects when the team is picked", async () => {

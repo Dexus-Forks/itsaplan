@@ -103,8 +103,15 @@ or on the request body is checked in the handler or the service.
   sets `sharingTeamsOnly` and the chosen teams. While any of them closes a project, its links
   answer 404 and a new link gets 403. Revoking still works. The tokens stay, so the same links open
   when sharing is on again.
-- **Personal workspaces:** no route creates a workspace. While `personalWorkspaces` is on in the
-  auth settings (the default), a person who owns none gets one at sign-up, or on the next request
+- **Workspace creation:** `POST /workspaces` creates an empty workspace owned by the caller.
+  Its trimmed name contains 1–60 characters. `GET /workspaces/creation` reports whether the
+  caller may create one and the restriction reason. Ordinary people may create workspaces while
+  `personalWorkspaces` is on; the instance owner may create them with either setting value.
+  Agent accounts cannot create them. Self-hosted instances set no ownership count limit. An
+  edition can set one through `setOwnedWorkspaceLimit`; the service checks it under a user-row
+  lock in the creation transaction.
+- **Personal workspaces:** while `personalWorkspaces` is on in the auth settings (the default),
+  a person who owns none gets one at sign-up, or on the next request
   through `ensurePersonalWorkspace` in `authContext`. While it is off, only the instance owner gets
   one, and anyone else works in the teams they are added to. An agent's bot user never owns one.
 - **Account deletion** (`deleteAccount`): god and the instance's SCIM provider delete an account.

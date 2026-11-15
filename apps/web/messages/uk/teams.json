@@ -939,6 +939,18 @@
     },
     "queue": {
       "title": "Запуски агентів"
+    },
+    "creationRestricted": "Workspace creation is restricted for this account. The instance owner manages who may create workspaces.",
+    "creationLimit": "Your account has reached its workspace limit.",
+    "creationFailed": "Could not check whether you can create a workspace.",
+    "creationRetry": "Try again",
+    "createDialog": {
+      "title": "Create workspace",
+      "hint": "Create a workspace for its own teams and projects.",
+      "name": "Workspace name",
+      "nameHint": "Use 1–60 characters. Spaces at the start and end are removed.",
+      "submit": "Create workspace",
+      "created": "Workspace created"
     }
   }
 }

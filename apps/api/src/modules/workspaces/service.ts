@@ -285,10 +285,7 @@ export async function deleteWorkspace(workspaceId: number, ownerId: string): Pro
 
 export type WorkspaceCreationBlock = 'restricted' | 'limit';
 
-// Whether a person may create a workspace, and if not, why: the instance keeps
-// workspaces to its owner, or they already own as many as one person may. An agent's bot
-// user is no person and creates none. No core route calls this or createOwnWorkspace;
-// an edition that lets a person own more workspaces mounts its route on them.
+// The UI reads this policy; creation checks it again under the user's row lock.
 export async function workspaceCreation(
   current: AuthUser,
   executor: DbExecutor = db,
@@ -309,15 +306,21 @@ export async function workspaceCreation(
 }
 
 export async function createOwnWorkspace(current: AuthUser, name: string): Promise<number> {
+  const normalized = name.trim();
+  if (normalized.length < 1 || normalized.length > 60) {
+    throw new HttpError(400, 'Workspace names must contain 1–60 characters after trimming');
+  }
   return db.transaction(async (tx) => {
     // Two requests at once would otherwise both count the same owned workspaces.
     await tx.select({ id: user.id }).from(user).where(eq(user.id, current.id)).for('update');
     const { reason } = await workspaceCreation(current, tx);
     if (reason === 'restricted') {
-      throw new HttpError(403, 'Only the instance owner can create workspaces');
+      throw new HttpError(403, 'You may not create a workspace');
     }
-    if (reason === 'limit') throw new HttpError(409, 'You already own a workspace');
-    return createWorkspace(tx, name, current.id);
+    if (reason === 'limit') {
+      throw new HttpError(409, 'You already own the maximum number of workspaces allowed');
+    }
+    return createWorkspace(tx, normalized, current.id);
   });
 }
 

@@ -170,6 +170,23 @@ once: a new pair ends every existing subscription, and members turn push on agai
 browser. The worker sends to the browsers' push services (Google, Mozilla, Apple), so it needs
 outbound HTTPS. [docs/dev/web-push.md](dev/web-push.md) describes the whole path.
 
+## Workspaces
+
+One account can own several workspaces on a self-hosted instance. Each workspace has its own
+teams, projects, administrators and settings.
+
+1. Open **Manage teams** from the project picker, or open `/account/teams`.
+2. Choose **New workspace** in the workspace rail, enter its name and choose **Create workspace**.
+3. In the new workspace, choose **New team**, then add projects to that team.
+4. Select a workspace in the rail or the project picker to open its teams and projects.
+
+The project picker's **New workspace** action opens the same creation form. Names contain
+1–60 characters after spaces at the start and end are removed. Repeated names are allowed.
+
+Ordinary users can create workspaces while **Personal workspaces** is enabled in god mode.
+The instance owner can create them with either setting value. Turning the setting off keeps
+existing workspaces and lets other people work in teams they are added to.
+
 ## Single sign-on
 
 Any provider with an OpenID Connect discovery document works: Keycloak, Authentik, KanIDM,

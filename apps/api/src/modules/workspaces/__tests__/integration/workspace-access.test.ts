@@ -51,6 +51,87 @@ describe('workspace access', () => {
   beforeEach(resetDb);
   afterEach(() => setWorkspaceRoleGrant('admin', readOnlyPermissions()));
 
+  it('keeps an admin and member within their workspace when its owner owns another', async () => {
+    await signUpTestUser({ team: false });
+    const owner = await signUpTestUser({ team: false });
+    const client = authedApi(owner.cookie);
+    const firstId = owner.workspaceId!;
+    const firstTeam = await client.teams.post({
+      name: 'First',
+      slug: 'first',
+      workspaceId: firstId,
+    });
+    await client
+      .teams({ teamId: firstTeam.data!.id })
+      .projects.post({ key: 'APP', name: 'First app' });
+    const firstProject = (await client.projects.get()).data![0]!;
+    const admin = await signUpTestUser({ team: false });
+    const member = await signUpTestUser({ team: false });
+    const outsider = await signUpTestUser({ team: false });
+    const adminInvite = await client
+      .teams({ teamId: firstTeam.data!.id })
+      .invites.post({ email: admin.email, role: 'member' });
+    await authedApi(admin.cookie).invites({ token: adminInvite.data!.token }).accept.post();
+    await client.workspaces({ workspaceId: firstId }).managers.post({ userId: admin.userId });
+    const memberInvite = await client
+      .projects({ projectKey: firstProject.ref })
+      .invites.post({ email: member.email, role: 'member' });
+    await authedApi(member.cookie).invites({ token: memberInvite.data!.token }).accept.post();
+    const originalMembers = (await client.projects({ projectKey: firstProject.ref }).members.get())
+      .data;
+
+    const second = await client.workspaces.post({ name: 'Second workspace' });
+    expect(second.status).toBe(201);
+    const secondId = second.data!.id;
+    const secondTeam = await client.teams.post({
+      name: 'Second',
+      slug: 'second',
+      workspaceId: secondId,
+    });
+    await client
+      .teams({ teamId: secondTeam.data!.id })
+      .projects.post({ key: 'APP', name: 'Second app' });
+    const projects = (await client.projects.get()).data!;
+    const secondProject = projects.find((entry) => entry.teamId === secondTeam.data!.id)!;
+    expect(secondProject.ref).not.toBe(firstProject.ref);
+    expect((await client.projects({ projectKey: firstProject.ref }).get()).data!.project.id).toBe(
+      firstProject.id,
+    );
+    expect((await client.projects({ projectKey: secondProject.ref }).get()).data!.project.id).toBe(
+      secondProject.id,
+    );
+    expect((await client.projects({ projectKey: firstProject.ref }).members.get()).data).toEqual(
+      originalMembers,
+    );
+
+    for (const person of [admin, member, outsider]) {
+      const other = authedApi(person.cookie);
+      expect((await other.workspaces({ workspaceId: secondId }).get()).status).toBe(404);
+      expect(
+        (await other.workspaces({ workspaceId: secondId }).patch({ name: 'Unauthorized' })).status,
+      ).toBe(404);
+      expect((await other.workspaces({ workspaceId: secondId }).delete()).status).toBe(404);
+      expect(
+        (
+          await other.teams.post({
+            name: 'Unauthorized',
+            slug: 'unauthorized',
+            workspaceId: secondId,
+          })
+        ).status,
+      ).toBe(403);
+      expect(
+        (await other.projects.get()).data!.some((entry) => entry.id === secondProject.id),
+      ).toBe(false);
+    }
+    expect(
+      (await authedApi(admin.cookie).projects({ projectKey: firstProject.ref }).get()).status,
+    ).toBe(200);
+    expect(
+      (await authedApi(member.cookie).projects({ projectKey: firstProject.ref }).get()).status,
+    ).toBe(200);
+  });
+
   it('lets the workspace owner delete a team, and not an admin', async () => {
     const { asOwner, asAdmin, teamId } = await setup();
     const project = (await asOwner.projects({ projectKey: 'MKT' }).get()).data!.project;

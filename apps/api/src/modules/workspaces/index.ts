@@ -23,10 +23,12 @@ import {
 } from '#modules/scim/mappings';
 import {
   WorkspaceCandidateListResponse,
+  WorkspaceCreationResponse,
   WorkspaceListResponse,
   WorkspaceManagerListResponse,
   WorkspaceResponse,
   addManagerBody,
+  createWorkspaceBody,
   scimGroupParams,
   searchQuery,
   updateWorkspaceBody,
@@ -35,6 +37,7 @@ import {
 } from './model';
 import {
   addAdmin,
+  createOwnWorkspace,
   deleteWorkspace,
   getWorkspace,
   listManagerCandidates,
@@ -42,14 +45,10 @@ import {
   listWorkspaces,
   removeAdmin,
   updateWorkspace,
+  workspaceCreation,
 } from './service';
 
-// A workspace owns teams. Only its owner and admins manage it; everyone else sees it
-// through the teams they are in. No route creates one: sign-up and sign-in make each
-// person's own (@repo/auth), and an edition that lets a person own more mounts its route
-// on createOwnWorkspace. SCIM of its own is there only where a build sets SCIM up per
-// workspace (setWorkspaceScim in @repo/auth): its owner sets it up, and the identity
-// provider decides who has access to the workspace. The instance's is set up in god mode.
+// Workspace SCIM is available only when an edition enables setWorkspaceScim in @repo/auth.
 export const workspaceRoutes = new Elysia({ name: 'workspaces', detail: { tags: ['Workspaces'] } })
   .use(authContext)
   .use(guards)
@@ -61,6 +60,31 @@ export const workspaceRoutes = new Elysia({ name: 'workspaces', detail: { tags: 
       description: 'The workspaces you manage or hold a team in, with your standing in each.',
     },
   })
+
+  .get('/workspaces/creation', ({ user }) => workspaceCreation(requireUser(user)), {
+    response: { 200: WorkspaceCreationResponse, ...errors(401) },
+    detail: {
+      summary: 'Get workspace creation availability',
+      description: 'Whether your account may create a workspace, and why creation is restricted.',
+    },
+  })
+
+  .post(
+    '/workspaces',
+    async ({ user, body, set }) => {
+      const workspaceId = await createOwnWorkspace(requireUser(user), body.name);
+      set.status = 201;
+      return getWorkspace(workspaceId, 'owner');
+    },
+    {
+      body: createWorkspaceBody,
+      response: { 201: WorkspaceResponse, ...errors(400, 401, 403, 409) },
+      detail: {
+        summary: 'Create a workspace',
+        description: 'Create an empty workspace with your account as its owner.',
+      },
+    },
+  )
 
   .get(
     '/workspaces/:workspaceId',

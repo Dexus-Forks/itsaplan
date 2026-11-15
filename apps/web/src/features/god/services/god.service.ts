@@ -72,10 +72,6 @@ import {
 import type { Permissions } from '@/lib/api/endpoints/roles';
 import { qk } from '@/services/queryKeys';
 
-// Data hooks for god mode. Every write returns the new state, which replaces the
-// cache entry directly — these are single-row settings, so there is nothing else to
-// invalidate. The invite list is a list, so its writes refetch it.
-
 // Configuring a sign-in provider decides whether password sign-in may be turned off,
 // and changes what the sign-in screen offers.
 function invalidateSignInMethods(qc: ReturnType<typeof useQueryClient>): void {
@@ -97,6 +93,7 @@ export function useUpdateInstanceAuthSettings() {
     onSuccess: (data) => {
       qc.setQueryData(qk.instanceAuthSettings, data);
       qc.setQueryData(qk.inviteSearch, { enabled: data.inviteSearch });
+      void qc.invalidateQueries({ queryKey: qk.workspaceCreation });
     },
   });
 }

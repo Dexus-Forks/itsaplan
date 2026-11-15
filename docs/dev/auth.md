@@ -28,6 +28,11 @@ off, or left with no workspace after deleting or handing over its own gets one o
 request, while the setting is on. `/me` does not pass through `authContext`. An agent's bot user
 never gets one.
 
+Eligible people create additional empty workspaces through `POST /workspaces`. Ordinary
+accounts need `personalWorkspaces` enabled; the instance owner may create with either value.
+Self-hosted instances set no ownership count limit. Owning several workspaces does not change
+the automatic provisioning rule: an account gets a personal workspace only while it owns none.
+
 Each process keeps a set of accounts that need nothing (`settled`), so for them a request costs
 no query. `forgetPersonalWorkspace` removes an account from the set in that process only. With
 the setting off, a non-god account outside the set reads `app_setting` on each request.

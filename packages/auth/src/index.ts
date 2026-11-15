@@ -468,11 +468,10 @@ const settled = new Set<string>();
 // The personal workspace of an account that owns none, named after the person: the
 // instance owner's always, anyone else's while personal workspaces are on. Sign-up calls
 // it, and apps/api on every request, so an account made before personal workspaces, by
-// SCIM, or while they were off gets its own without signing in again. Nothing in the API
-// creates a workspace; an edition that lets a person own more mounts a route of its own.
-// An agent's bot user is no person. A person in no team and with no pending invite also
-// gets a first team in it, named after the local part of their address, so they start
-// with a team instead of a form to create one.
+// SCIM, or while they were off gets its own without signing in again. Additional workspaces
+// are created through the API. An agent's bot user is no person. A person in no team and
+// with no pending invite also gets a first team in it, named after the local part of their
+// address, so they start with a team instead of a form to create one.
 // ponytail: an account with no workspace while they are off reads the setting on each
 // request; cache it with the setting if that ever shows.
 export async function ensurePersonalWorkspace(account: {

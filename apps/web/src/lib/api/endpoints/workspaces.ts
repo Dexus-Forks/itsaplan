@@ -11,6 +11,11 @@ export interface WorkspaceSummary {
   canCreateTeam: boolean;
 }
 
+export interface WorkspaceCreation {
+  allowed: boolean;
+  reason: 'restricted' | 'limit' | null;
+}
+
 // Who creates teams in a workspace: the owner alone, the owner and admins, or anyone in
 // one of its teams.
 export type TeamCreation = 'owner' | 'managers' | 'members';
@@ -57,6 +62,11 @@ export interface WorkspaceManager extends WorkspacePerson {
 }
 
 export const listWorkspaces = () => request<WorkspaceSummary[]>('/workspaces');
+
+export const getWorkspaceCreation = () => request<WorkspaceCreation>('/workspaces/creation');
+
+export const createWorkspace = (input: { name: string }) =>
+  request<Workspace>('/workspaces', { method: 'POST', body: JSON.stringify(input) });
 
 export const getWorkspace = (workspaceId: number) =>
   request<Workspace>(`/workspaces/${workspaceId}`);

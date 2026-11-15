@@ -6,6 +6,15 @@ export const workspaceParams = t.Object({ workspaceId: t.Numeric() });
 
 export const workspaceManagerParams = t.Object({ workspaceId: t.Numeric(), userId: t.String() });
 
+export const createWorkspaceBody = t.Object({
+  name: t.String({ description: 'The workspace name, 1–60 characters after trimming.' }),
+});
+
+export const WorkspaceCreationResponse = t.Object({
+  allowed: t.Boolean(),
+  reason: t.Nullable(t.Union([t.Literal('restricted'), t.Literal('limit')])),
+});
+
 export const updateWorkspaceBody = t.Object({
   name: t.Optional(t.String({ minLength: 1, maxLength: 60 })),
   color: t.Optional(t.Nullable(t.String({ pattern: '^#[0-9a-fA-F]{6}$' }))),
