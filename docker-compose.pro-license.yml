@@ -1,0 +1,42 @@
+# Switches the running itsaplan stack (core) to the Pro images with the
+# license check patched. Base files stay untouched.
+#
+# Install once:
+#   cp docker-compose.pro-license.yml /home/josef/demo/itsaplan/
+#   cp -r license-patch /home/josef/demo/itsaplan/
+#
+# Apply:
+#   cd /home/josef/demo/itsaplan
+#   docker compose -f docker-compose.yml -f /home/josef/code/itsaplan/docker-compose.yml \
+#     -f docker-compose.pro-license.yml up -d
+#
+#   docker compose -p itsaplan-protest --env-file ./pro-test.env \
+#     -f docker-compose.pro.yml -f docker-compose.license-override.yml up -d
+#
+# Then open the web app in god mode, License, and paste:
+#   eyJkb21haW4iOiJwcm8iLCJwbGFuIjoicHJvIiwibGljZW5zZWRUbyI6InNlbGYtaG9zdGVkIiwiZXhwaXJlc0F0IjoiMjA5OS0xMi0zMVQyMzo1OTo1OS4wMDBaIn0.cHJv
+#
+# Pro image tags are pinned here (VERSION in .env pins core tags). The two
+# read-only mounts override the license modules inside the images and keep
+# doing so across `docker compose pull` updates of the core stack.
+
+services:
+  migrate:
+    image: ghcr.io/croffasia/itsaplan-pro-api:latest
+    command: ['bun', 'run', 'vendor/itsaplan/packages/db/src/migrate.ts']
+    volumes:
+      - db-backups:/backups
+      - ./license-patch/service.js:/app/apps/api/src/modules/license/service.js:ro
+  api:
+    image: ghcr.io/croffasia/itsaplan-pro-api:latest
+    command: ['./pro-api']
+    volumes:
+      - ./license-patch/service.js:/app/apps/api/src/modules/license/service.js:ro
+  worker:
+    image: ghcr.io/croffasia/itsaplan-pro-worker:latest
+    volumes:
+      - ./license-patch/license.js:/app/apps/worker/src/license.js:ro
+  bot:
+    image: ghcr.io/croffasia/itsaplan-pro-bot:latest
+  web:
+    image: ghcr.io/croffasia/itsaplan-pro-web:latest
